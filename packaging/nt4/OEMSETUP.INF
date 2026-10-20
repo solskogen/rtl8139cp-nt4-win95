@@ -1,0 +1,609 @@
+; SPDX-License-Identifier: MIT
+; RTL8139C+ NDIS 3 miniport for Windows NT 4.0 (Network Control Panel).
+; Control Panel > Network > Adapters > Add > Have Disk, then point here.
+; Net rules follow the NT DDK Network Guide sections 3.4-3.4.7.
+[Identification]
+    OptionType = NetAdapter
+
+[PlatformsSupported]
+    PCI
+
+[LanguagesSupported]
+    ENG
+
+[Options]
+    RTL8139CP
+
+[OptionsTextENG]
+    RTL8139CP = "Realtek RTL8139C+ PCI Fast Ethernet (open NDIS 3 driver)"
+
+[FileConstants]
+    UtilityInf                 = "UTILITY.INF"
+    SubroutineInf              = "SUBROUTN.INF"
+    SoftwareType               = "driver"
+    NetEventDLL                = "%SystemRoot%\System32\netevent.dll"
+    Manufacturer               = "RTL8139CP"
+    ProductMajorVersion        = "1"
+    ProductMinorVersion        = "0"
+    ProductSoftwareName        = "Rtl8139cp"
+    ProductSoftwareImagePath   = "\SystemRoot\System32\drivers\r8139cp.sys"
+    NetRuleSoftwareType        = "rtl8139cpSys ndisDriver rtl8139cpDriver"
+    NetRuleSoftwareUse         = $(SoftwareType)
+    NetRuleSoftwareBindForm    = """Rtl8139cpSys"" yes no container"
+    NetRuleSoftwareClass       = {"rtl8139cpDriver basic"}
+    NetRuleSoftwareBindable    = {"rtl8139cpDriver rtl8139cpAdapter non exclusive 100"}
+    ProductHardwareName        = "Rtl8139cp"
+    NetRuleHardwareType        = "rtl8139cp rtl8139cpAdapter"
+    NetRuleHardwareBindForm    = " yes yes container"
+    NetRuleHardwareClass       = {"rtl8139cpAdapter basic"}
+    ProductKeyName             = $(!NTN_SoftwareBase)"\"$(Manufacturer)"\"$(ProductSoftwareName)"\CurrentVersion"
+    ; PCI 10EC:8139 in decimal. Classic RTL8139 chips share the ID; the
+    ; driver checks for the C+ engine and refuses the others.
+    VendorID                   = 4332
+    DeviceID                   = 33081
+
+[FileConstantsENG]
+    ProCaption                 = "Windows NT Setup"
+    ProCancel                  = "Cancel"
+    ProCancelMsg               = "Windows NT Networking is not correctly installed. Are you sure you want to cancel copying files?"
+    ProCancelCap               = "Network Setup Message"
+    ProText1                   = "Copying:"
+    ProText2                   = "To:"
+    FunctionTitle              = "RTL8139C+ Adapter Setup"
+    ProductSoftwareDescription = "Open NDIS 3 miniport driver for Realtek RTL8139C+"
+    ProductSoftwareDisplayName = "RTL8139C+ Adapter Driver"
+    ProductSoftwareTitle       = "RTL8139C+ Adapter Driver"
+    ProductHardwareDescription = "Realtek RTL8139C+ PCI Fast Ethernet Adapter"
+    ProductHardwareTitle       = "Realtek RTL8139C+ PCI Fast Ethernet Adapter"
+    NoCardFound                = "No PCI 10EC:8139 adapter was found."
+    AllInstalled               = "Every detected PCI 10EC:8139 adapter is already installed."
+    SoftwareNoConfig           = "The driver has no options. Select the adapter on the Adapters tab and choose Properties."
+    BadVlanId                  = "The VLAN ID must be a number from 0 to 4094 (0 disables VLAN)."
+    BadNetworkAddress          = "The network address must be 12 hexadecimal digits of a unicast address (second digit 0, 2, 4, 6, 8, A, C or E) and not all zero. Leave it empty to use the address stored on the card."
+    ; ConnectionType values read by the driver (docs\DRIVER.md).
+    MediaList                  = ^(MediaChoicesENG, 1)
+    MediaValues                = ^(MediaChoicesENG, 2)
+    ShellingError              = "Setup could not run a subroutine from UTILITY.INF or SUBROUTN.INF."
+    SourceFailed               = "Setup could not locate the driver disk."
+    CopyFailed                 = "Setup could not copy r8139cp.sys."
+    GenericFailure             = "RTL8139C+ adapter setup failed."
+
+[GeneralConstants]
+    KeyNull                    = ""
+    MAXIMUM_ALLOWED            = 33554432
+    RegistryErrorIndex         = NO_ERROR
+    NoTitle                    = 0
+    TRUE                       = 1
+    FALSE                      = 0
+    Digits                     = "0123456789"
+    DigitList                  = {"0","1","2","3","4","5","6","7","8","9"}
+    HexDigits                  = "0123456789ABCDEFabcdef"
+    HexList                    = {"0","1","2","3","4","5","6","7","8","9","A","B","C","D","E","F"}
+    EvenHexList                = {"0","2","4","6","8","A","C","E"}
+
+[date]
+    Now = {} ? $(!LIBHANDLE) GetSystemDate
+
+[Identify]
+    read-syms Identification
+    set Status     = STATUS_SUCCESSFUL
+    set Identifier = $(OptionType)
+    set Media      = #("Source Media Descriptions", 1, 1)
+    Return $(Status) $(Identifier) $(Media)
+
+[ReturnOptions]
+    set LanguageList = ^(LanguagesSupported, 1)
+    Ifcontains(i) $($0) in $(LanguageList)
+        set OptionList     = ^(Options, 1)
+        set OptionTextList = ^(OptionsText$($0), 1)
+        Return STATUS_SUCCESSFUL $(OptionList) $(OptionTextList)
+    endif
+    Return STATUS_NOLANGUAGE {} {}
+
+[InstallOption]
+    set Option   = $($1)
+    set SrcDir   = $($2)
+    set AddCopy  = $($3)
+    set DoCopy   = $($4)
+    set DoConfig = $($5)
+    set LanguageList = ^(LanguagesSupported, 1)
+    Ifcontains(i) $($0) NOT-IN $(LanguageList)
+        Return STATUS_NOLANGUAGE
+    endif
+    set-subst LF = "\n"
+    read-syms GeneralConstants
+    read-syms FileConstants
+    read-syms FileConstants$(!STF_LANGUAGE)
+    detect date
+    set-title $(FunctionTitle)
+    set CommonStatus         = STATUS_SUCCESSFUL
+    set Error                = ""
+    set LoopError            = ""
+    set OEM_ABANDON_OPTIONS  = {}
+    set OEM_ABANDON_SOFTWARE = FALSE
+    EndWait
+
+    Ifstr(i) $(!NTN_InstallMode) == deinstall
+        goto removeadapter
+    else-Ifstr(i) $(!NTN_InstallMode) == Update
+        goto upgradesoftware
+    else-Ifstr(i) $(!NTN_InstallMode) == bind
+        goto end
+    else-Ifstr(i) $(!NTN_InstallMode) == configure
+        goto configureadapter
+    endif
+    goto installadapter
+
+configureadapter = +
+    set CommonStatus = STATUS_USERCANCEL
+    Ifstr(i) $(ProductKeyName) == $(!NTN_RegBase)
+        Shell $(SubroutineInf) SetupMessage, $(!STF_LANGUAGE), "NONFATAL", $(SoftwareNoConfig)
+        goto end
+    endif
+    ; !NTN_RegBase is the selected adapter's NetworkCards\N key.
+    OpenRegKey $(!REG_H_LOCAL) "" $(!NTN_RegBase) $(MAXIMUM_ALLOWED) KeyNetcard
+    Ifstr $(KeyNetcard) == $(KeyNull)
+        set RegistryErrorIndex = CANNOT_FIND_COMPONENT_SERVICE
+        goto fatalregistry
+    endif
+    Shell $(UtilityInf), FindService, $(KeyNetcard)
+    ifint $($ShellCode) != $(!SHELL_CODE_OK)
+        CloseRegKey $(KeyNetcard)
+        goto shellerror
+    endif
+    set RegistryErrorIndex = $($R0)
+    CloseRegKey $(KeyNetcard)
+    ifstr(i) $(RegistryErrorIndex) != NO_ERROR
+        goto fatalregistry
+    endif
+    CloseRegKey $($R1)
+    set KeyParameters = $($R2)
+
+    set Media          = 0
+    set VlanId         = 0
+    set NetworkAddress = ""
+    EnumRegValue $(KeyParameters) ValueList
+    ForListDo $(ValueList)
+        set ValueName = *($($),1)
+        set ValueData = *($($),4)
+        ifstr(i) $(ValueName) == "ConnectionType"
+            set Media = $(ValueData)
+        else-ifstr(i) $(ValueName) == "VlanId"
+            set VlanId = $(ValueData)
+        else-ifstr(i) $(ValueName) == "NetworkAddress"
+            set NetworkAddress = $(ValueData)
+        endif
+    EndForListDo
+    set MediaText = *($(MediaList), ~($(MediaValues), $(Media)))
+    ifstr(i) $(MediaText) == ""
+        set MediaText = *($(MediaList), 1)
+    endif
+
+    ; Nothing is written unless all three dialogs are confirmed.
+    read-syms MediaDlg$(!STF_LANGUAGE)
+    ui start "InputDlg"
+    ifstr(i) $(DLGEVENT) != "CONTINUE"
+        ui pop 1
+        goto configuredone
+    endif
+    set MediaText = $(Combo1Out)
+    ui pop 1
+    set Media = *($(MediaValues), ~($(MediaList), $(MediaText)))
+    ifstr(i) $(Media) == ""
+        set Media = 0
+    endif
+
+vlandialog = +
+    read-syms VlanDlg$(!STF_LANGUAGE)
+    ui start "InputDlg"
+    ifstr(i) $(DLGEVENT) != "CONTINUE"
+        ui pop 1
+        goto configuredone
+    endif
+    set VlanId = $(EditTextOut)
+    ui pop 1
+    ; 1-4 decimal digits, at most 4094.
+    set Valid = $(TRUE)
+    Split-String $(VlanId) $(Digits) Chars
+    QueryListSize Count $(Chars)
+    ifint $(Count) < 1
+        set Valid = $(FALSE)
+    endif
+    ifint $(Count) > 4
+        set Valid = $(FALSE)
+    endif
+    ForListDo $(Chars)
+        ifcontains(i) $($) not-in $(DigitList)
+            set Valid = $(FALSE)
+        endif
+    EndForListDo
+    ifint $(Valid) == $(TRUE)
+        ifint $(VlanId) > 4094
+            set Valid = $(FALSE)
+        endif
+    endif
+    ifint $(Valid) == $(FALSE)
+        Shell $(SubroutineInf) SetupMessage, $(!STF_LANGUAGE), "NONFATAL", $(BadVlanId)
+        goto vlandialog
+    endif
+
+addressdialog = +
+    read-syms AddressDlg$(!STF_LANGUAGE)
+    ui start "InputDlg"
+    ifstr(i) $(DLGEVENT) != "CONTINUE"
+        ui pop 1
+        goto configuredone
+    endif
+    set NetworkAddress = $(EditTextOut)
+    ui pop 1
+    ; Empty, or 12 hex digits of a unicast (I/G bit clear), non-zero MAC.
+    set Valid = $(TRUE)
+    ifstr(i) $(NetworkAddress) != ""
+        Split-String $(NetworkAddress) $(HexDigits) Chars
+        QueryListSize Count $(Chars)
+        ifint $(Count) != 12
+            set Valid = $(FALSE)
+        endif
+        ForListDo $(Chars)
+            ifcontains(i) $($) not-in $(HexList)
+                set Valid = $(FALSE)
+            endif
+        EndForListDo
+        ifcontains(i) *($(Chars),2) not-in $(EvenHexList)
+            set Valid = $(FALSE)
+        endif
+        ifstr(i) $(NetworkAddress) == "000000000000"
+            set Valid = $(FALSE)
+        endif
+    endif
+    ifint $(Valid) == $(FALSE)
+        Shell $(SubroutineInf) SetupMessage, $(!STF_LANGUAGE), "NONFATAL", $(BadNetworkAddress)
+        goto addressdialog
+    endif
+
+    ifstr(i) $(NetworkAddress) == ""
+        set NewValueList = {{ConnectionType,$(NoTitle),$(!REG_VT_DWORD),$(Media)},+
+                            {VlanId,$(NoTitle),$(!REG_VT_DWORD),$(VlanId)}}
+    else
+        set NewValueList = {{ConnectionType,$(NoTitle),$(!REG_VT_DWORD),$(Media)},+
+                            {VlanId,$(NoTitle),$(!REG_VT_DWORD),$(VlanId)},+
+                            {NetworkAddress,$(NoTitle),$(!REG_VT_SZ),$(NetworkAddress)}}
+    endif
+    Shell $(UtilityInf), AddValueList, $(KeyParameters), $(NewValueList)
+    ifint $($ShellCode) != $(!SHELL_CODE_OK)
+        CloseRegKey $(KeyParameters)
+        goto shellerror
+    endif
+    set RegistryErrorIndex = $($R0)
+    ifstr(i) $(NetworkAddress) == ""
+        DeleteRegValue $(KeyParameters) "NetworkAddress"
+    endif
+    CloseRegKey $(KeyParameters)
+    ifstr(i) $(RegistryErrorIndex) != NO_ERROR
+        goto fatalregistry
+    endif
+    ; The miniport reads its parameters only at initialization.
+    set CommonStatus = STATUS_REBOOT
+    goto end
+
+configuredone = +
+    CloseRegKey $(KeyParameters)
+    goto end
+
+installadapter = +
+    set SoftwareExisted = $(FALSE)
+    OpenRegKey $(!REG_H_LOCAL) "" $(ProductKeyName) $(MAXIMUM_ALLOWED) KeyProduct
+    Ifstr $(KeyProduct) != $(KeyNull)
+        set SoftwareExisted = $(TRUE)
+        CloseRegKey $(KeyProduct)
+    endif
+
+    Shell $(UtilityInf), GetPCIInformation, $(VendorID) $(DeviceID)
+    ifint $($ShellCode) != $(!SHELL_CODE_OK)
+        goto shellerror
+    endif
+    set CardList = $($R0)
+    ifstr(i) $(CardList) == {}
+        set Error = $(NoCardFound)
+        goto fatal
+    endif
+
+    StartWait
+    ifint $(SoftwareExisted) == $(FALSE)
+        ifstr(i) $(DoCopy) == "YES"
+            ; NO: OEM disk. YES would make setup use the NT install source.
+            Shell $(UtilityInf), DoAskSource, $(!STF_CWDDIR), $(SrcDir) NO
+            ifint $($ShellCode) != $(!SHELL_CODE_OK)
+                goto shellerror
+            else-ifstr(i) $($R0) == STATUS_FAILED
+                set Error = $(SourceFailed)
+                goto fatal
+            else-ifstr(i) $($R0) == STATUS_USERCANCEL
+                set CommonStatus = STATUS_USERCANCEL
+                goto end
+            endif
+            set SrcDir = $($R1)
+        endif
+        install "Install-Option"
+        ifstr(i) $(STF_INSTALL_OUTCOME) != STF_SUCCESS
+            set Error = $(CopyFailed)
+            goto fatal
+        endif
+
+        Shell $(UtilityInf), AddSoftwareComponent, $(Manufacturer), $(ProductSoftwareName), $(ProductSoftwareName), $(ProductSoftwareDisplayName), $(STF_CONTEXTINFNAME), $(ProductSoftwareImagePath), "kernel", "NDIS", {}, "", $(NetEventDLL)
+        ifint $($ShellCode) != $(!SHELL_CODE_OK)
+            goto shellerror
+        endif
+        set RegistryErrorIndex = $($R0)
+        ifstr(i) $(RegistryErrorIndex) != NO_ERROR
+            CloseRegKey $($R1)
+            CloseRegKey $($R2)
+            CloseRegKey $($R3)
+            CloseRegKey $($R4)
+            CloseRegKey $($R5)
+            goto fatalregistry
+        endif
+        set OEM_ABANDON_SOFTWARE = TRUE
+        set SoftProductKey   = $($R1)
+        set SoftNetRulesKey  = $($R2)
+        set SoftServiceKey   = $($R3)
+        set SoftParameterKey = $($R4)
+        set SoftLinkageKey   = $($R5)
+
+        set NewValueList = {{SoftwareType,$(NoTitle),$(!REG_VT_SZ),$(SoftwareType)},+
+                            {MajorVersion,$(NoTitle),$(!REG_VT_DWORD),$(ProductMajorVersion)},+
+                            {MinorVersion,$(NoTitle),$(!REG_VT_DWORD),$(ProductMinorVersion)},+
+                            {Title,$(NoTitle),$(!REG_VT_SZ),$(ProductSoftwareTitle)},+
+                            {Description,$(NoTitle),$(!REG_VT_SZ),$(ProductSoftwareDescription)},+
+                            {ServiceName,$(NoTitle),$(!REG_VT_SZ),$(ProductSoftwareName)},+
+                            {InstallDate,$(NoTitle),$(!REG_VT_DWORD),*($(Now),1)}}
+        Shell $(UtilityInf), AddValueList, $(SoftProductKey), $(NewValueList)
+        set RegistryErrorIndex = $($R0)
+        ifstr(i) $(RegistryErrorIndex) == NO_ERROR
+            set NewValueList = {{type,$(NoTitle),$(!REG_VT_SZ),$(NetRuleSoftwareType)},+
+                                {use,$(NoTitle),$(!REG_VT_SZ),$(NetRuleSoftwareUse)},+
+                                {bindform,$(NoTitle),$(!REG_VT_SZ),$(NetRuleSoftwareBindForm)},+
+                                {class,$(NoTitle),$(!REG_VT_MULTI_SZ),$(NetRuleSoftwareClass)},+
+                                {bindable,$(NoTitle),$(!REG_VT_MULTI_SZ),$(NetRuleSoftwareBindable)},+
+                                {InfOption,$(NoTitle),$(!REG_VT_SZ),$(Option)}}
+            Shell $(UtilityInf), AddValueList, $(SoftNetRulesKey), $(NewValueList)
+            set RegistryErrorIndex = $($R0)
+        endif
+        CloseRegKey $(SoftProductKey)
+        CloseRegKey $(SoftNetRulesKey)
+        CloseRegKey $(SoftServiceKey)
+        CloseRegKey $(SoftParameterKey)
+        CloseRegKey $(SoftLinkageKey)
+        ifstr(i) $(RegistryErrorIndex) != NO_ERROR
+            goto fatalregistry
+        endif
+    endif
+
+    ; One adapter instance per detected function that is not yet installed.
+    ; Errors are recorded and handled after the loop instead of jumping out.
+    set AddedCount = 0
+    ForListDo $(CardList)
+        ifstr(i) $(LoopError) == ""
+            set Bus      = *($($),1)
+            ; SlotNumber is the PCI device number, as in Realtek's own INF;
+            ; the driver opens exactly that slot on BusNumber.
+            set Slot     = *($($),2)
+            Shell $(UtilityInf), IsNetCardAlreadyInstalled, $(Bus), $(Slot), $(ProductHardwareDescription), $(ProductHardwareName)
+            ifint $($ShellCode) != $(!SHELL_CODE_OK)
+                set LoopError = SHELL
+            else-ifstr(i) $($R0) != NO_ERROR
+                set LoopError = $($R0)
+            else-ifstr(i) $($R1) != "YES"
+                Shell $(UtilityInf), AddHardwareComponent, $(ProductHardwareName), $(STF_CONTEXTINFNAME), $(ProductKeyName)
+                ifint $($ShellCode) != $(!SHELL_CODE_OK)
+                    set LoopError = SHELL
+                else
+                    ifint $($R4) != -1
+                        set OEM_ABANDON_OPTIONS = >($(OEM_ABANDON_OPTIONS), $(!NTN_SoftwareBase)"\Microsoft\Windows NT\CurrentVersion\NetworkCards\"$($R4))
+                    endif
+                    ifstr(i) $($R0) != NO_ERROR
+                        set LoopError = $($R0)
+                        CloseRegKey $($R1)
+                        CloseRegKey $($R2)
+                        CloseRegKey $($R3)
+                    else
+                        set KeyNetcard      = $($R1)
+                        set KeyAdapterRules = $($R2)
+                        set KeyParameters   = $($R3)
+                        set AdapterNumber   = $($R4)
+                        set NewValueList = {{Manufacturer,$(NoTitle),$(!REG_VT_SZ),$(Manufacturer)},+
+                                            {Title,$(NoTitle),$(!REG_VT_SZ),"["$(AdapterNumber)"] "$(ProductHardwareTitle)},+
+                                            {Description,$(NoTitle),$(!REG_VT_SZ),$(ProductHardwareDescription)},+
+                                            {ProductName,$(NoTitle),$(!REG_VT_SZ),$(ProductHardwareName)},+
+                                            {ServiceName,$(NoTitle),$(!REG_VT_SZ),$($R5)},+
+                                            {InstallDate,$(NoTitle),$(!REG_VT_DWORD),*($(Now),1)}}
+                        Shell $(UtilityInf), AddValueList, $(KeyNetcard), $(NewValueList)
+                        ifstr(i) $($R0) != NO_ERROR
+                            set LoopError = $($R0)
+                        endif
+                        set TempBindForm = """"$(ProductHardwareName)$(AdapterNumber)""""$(NetRuleHardwareBindForm)
+                        set NewValueList = {{type,$(NoTitle),$(!REG_VT_SZ),$(NetRuleHardwareType)},+
+                                            {bindform,$(NoTitle),$(!REG_VT_SZ),$(TempBindForm)},+
+                                            {class,$(NoTitle),$(!REG_VT_MULTI_SZ),$(NetRuleHardwareClass)},+
+                                            {InfOption,$(NoTitle),$(!REG_VT_SZ),$(Option)}}
+                        Shell $(UtilityInf), AddValueList, $(KeyAdapterRules), $(NewValueList)
+                        ifstr(i) $($R0) != NO_ERROR
+                            set LoopError = $($R0)
+                        endif
+                        ; BusType 5 = PCI, MediaType 1 = 802.3. ConnectionType
+                        ; 0 = auto-negotiate; VlanId 0 = VLAN disabled.
+                        set NewValueList = {{BusType,$(NoTitle),$(!REG_VT_DWORD),5},+
+                                            {BusNumber,$(NoTitle),$(!REG_VT_DWORD),$(Bus)},+
+                                            {SlotNumber,$(NoTitle),$(!REG_VT_DWORD),$(Slot)},+
+                                            {MediaType,$(NoTitle),$(!REG_VT_DWORD),1},+
+                                            {ConnectionType,$(NoTitle),$(!REG_VT_DWORD),0},+
+                                            {VlanId,$(NoTitle),$(!REG_VT_DWORD),0}}
+                        Shell $(UtilityInf), AddValueList, $(KeyParameters), $(NewValueList)
+                        ifstr(i) $($R0) != NO_ERROR
+                            set LoopError = $($R0)
+                        endif
+                        CloseRegKey $(KeyNetcard)
+                        CloseRegKey $(KeyAdapterRules)
+                        CloseRegKey $(KeyParameters)
+                        set-add AddedCount = $(AddedCount), 1
+                    endif
+                endif
+            endif
+        endif
+    EndForListDo
+    EndWait
+
+    ifstr(i) $(LoopError) == SHELL
+        goto shellerror
+    else-ifstr(i) $(LoopError) != ""
+        set RegistryErrorIndex = $(LoopError)
+        goto fatalregistry
+    endif
+    ifint $(AddedCount) == 0
+        set Error = $(AllInstalled)
+        goto fatal
+    endif
+    goto end
+
+removeadapter = +
+    Ifstr(i) $(ProductKeyName) == $(!NTN_RegBase)
+        Shell $(UtilityInf), RemoveSoftwareComponent, $(Manufacturer), $(ProductSoftwareName)
+    else
+        Shell $(UtilityInf), RemoveHardwareComponent, $(Manufacturer), $(ProductSoftwareName), $(!NTN_RegBase)
+    endif
+    ifint $($ShellCode) != $(!SHELL_CODE_OK)
+        goto shellerror
+    endif
+    ifstr(i) $($R0) != NO_ERROR
+        ifstr(i) $($R0) != REF_COUNT_NOT_ZERO
+            set RegistryErrorIndex = $($R0)
+            goto fatalregistry
+        endif
+    endif
+    goto end
+
+upgradesoftware = +
+    OpenRegKey $(!REG_H_LOCAL) "" $(ProductKeyName) $(MAXIMUM_ALLOWED) KeyProduct
+    Ifstr $(KeyProduct) == $(KeyNull)
+        set RegistryErrorIndex = UNABLE_ACCESS_SOFTWARE_REG
+        goto fatalregistry
+    endif
+    install "Install-Update"
+    ifstr(i) $(STF_INSTALL_OUTCOME) != STF_SUCCESS
+        CloseRegKey $(KeyProduct)
+        set Error = $(CopyFailed)
+        goto fatal
+    endif
+    SetRegValue $(KeyProduct) {MajorVersion,$(NoTitle),$(!REG_VT_DWORD),$(ProductMajorVersion)}
+    SetRegValue $(KeyProduct) {MinorVersion,$(NoTitle),$(!REG_VT_DWORD),$(ProductMinorVersion)}
+    CloseRegKey $(KeyProduct)
+    set CommonStatus = STATUS_REBOOT
+    goto end
+
+shellerror = +
+    set Error = $(ShellingError)
+    goto fatal
+
+fatalregistry = +
+    Shell $(UtilityInf) RegistryErrorString $(RegistryErrorIndex)
+    ifint $($ShellCode) == $(!SHELL_CODE_OK)
+        set Error = $($R0)
+    endif
+    goto fatal
+
+fatal = +
+    EndWait
+    ifstr(i) $(Error) == ""
+        set Error = $(GenericFailure)
+    endif
+    Shell $(SubroutineInf) SetupMessage, $(!STF_LANGUAGE), "FATAL", $(Error)
+    set CommonStatus = STATUS_FAILED
+    ; Undo any partial installation from this run only.
+    ForListDo $(OEM_ABANDON_OPTIONS)
+        Shell $(UtilityInf), RemoveHardwareComponent, $(Manufacturer), $(ProductSoftwareName), $($)
+    EndForListDo
+    ifstr(i) $(OEM_ABANDON_SOFTWARE) == TRUE
+        Shell $(UtilityInf), RemoveSoftwareComponent, $(Manufacturer), $(ProductSoftwareName)
+    endif
+    goto end
+
+end = +
+    Return $(CommonStatus)
+
+[Install-Option]
+    set STF_VITAL = ""
+    ifstr(i) $(AddCopy) == "YES"
+        AddSectionFilesToCopyList Files-$(Option) $(SrcDir) $(!STF_WINDOWSSYSPATH)\drivers
+    endif
+    ifstr(i) $(DoCopy) == "YES"
+        set !STF_NCPA_FLUSH_COPYLIST = TRUE
+        CopyFilesInCopyList
+    endif
+    Exit
+
+[Install-Update]
+    set STF_VITAL     = ""
+    set STF_OVERWRITE = "VERIFYSOURCEOLDER"
+    AddSectionFilesToCopyList Files-$(Option) $(SrcDir) $(!STF_WINDOWSSYSPATH)\drivers
+    set !STF_NCPA_FLUSH_COPYLIST = TRUE
+    CopyFilesInCopyList
+    Exit
+
+; NCPA dialogs. The templates are the stock Setup ones Realtek's NT4 INF uses.
+[MediaChoicesENG]
+    Media0 = "Auto-negotiate", 0
+    Media1 = "10 Mbps half duplex", 1
+    Media2 = "10 Mbps full duplex", 2
+    Media3 = "100 Mbps half duplex", 3
+    Media4 = "100 Mbps full duplex", 4
+
+[MediaDlgENG]
+    Caption           = "RTL8139C+ Connection Type"
+    DlgText           = "Choose the link speed and duplex mode. Auto-negotiate is recommended."
+    DlgType           = "Combination"
+    DlgTemplate       = "ADAP_PROTO_COMBO"
+    Combo1Label       = "&Connection type:"
+    Combo1List        = $(MediaList)
+    Combo1Out         = $(MediaText)
+    ComboListItemsIn  = {Combo1List}
+    ComboListItemsOut = {Combo1Out}
+    EditTextLim       = ""
+    CBOptionsGreyed   = {}
+    Continue          = "OK"
+    Cancel            = "Cancel"
+    Help              = "&Help"
+    HelpContext       = ""
+
+[VlanDlgENG]
+    Caption           = "RTL8139C+ VLAN ID"
+    DlgText           = "Static access VLAN, 0 to 4094. 0 disables VLAN tagging."
+    DlgType           = "Edit"
+    DlgTemplate       = "QUERY_COMPUTER_NAME"
+    Edit1Label        = "&VLAN ID:"
+    EditTextIn        = $(VlanId)
+    EditTextLim       = 4
+    EditFocus         = "ALL"
+    Continue          = "OK"
+    Exit              = "Cancel"
+    Help              = "&Help"
+    HelpContext       = ""
+
+[AddressDlgENG]
+    Caption           = "RTL8139C+ Network Address"
+    DlgText           = "Locally administered MAC address as 12 hex digits, for example 020102A3B4C5. Leave empty to use the address stored on the card."
+    DlgType           = "Edit"
+    DlgTemplate       = "QUERY_COMPUTER_NAME"
+    Edit1Label        = "&Network address:"
+    EditTextIn        = $(NetworkAddress)
+    EditTextLim       = 12
+    EditFocus         = "ALL"
+    Continue          = "OK"
+    Exit              = "Cancel"
+    Help              = "&Help"
+    HelpContext       = ""
+
+[Source Media Descriptions]
+    1 = "RTL8139C+ Windows NT 4.0 driver disk"
+
+[Files-RTL8139CP]
+1, r8139cp.sys, SIZE=40000

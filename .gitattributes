@@ -1,0 +1,3 @@
+# Windows installers must keep CRLF line endings.
+*.INF -text
+*.inf -text

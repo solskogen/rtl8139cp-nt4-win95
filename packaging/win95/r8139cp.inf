@@ -1,0 +1,101 @@
+; SPDX-License-Identifier: MIT
+; RTL8139C+ NDIS 3 miniport for Windows 95 OSR2.
+; Install on the PCI device (New Hardware wizard or Device Manager >
+; Change Driver), "Have Disk". Not via Network > Add: that creates an
+; adapter without PCI resources.
+[Version]
+Signature="$CHICAGO$"
+Class=Net
+ClassGUID={4d36e972-e325-11ce-bfc1-08002be10318}
+Provider=%Provider%
+
+[Manufacturer]
+%Provider%=Adapters
+
+; C+ and classic RTL8139 share this ID (and 86Box reports revision 10h for
+; its C+ model); the driver refuses non-C+ chips at initialization (event
+; marker 8139d00c).
+[Adapters]
+%Description%=RTL8139CP.ndi,PCI\VEN_10EC&DEV_8139
+
+[RTL8139CP.ndi]
+AddReg=RTL8139CP.ndi.reg,RTL8139CP.params.reg
+
+; Laid out like Windows 95's own NDIS 3 miniport INFs (NETPCI.INF,
+; NETEE16.INF): the loader values belong to the device, the ndis3 install
+; section only copies the driver.
+[RTL8139CP.ndi.reg]
+HKR,,DevLoader,,"*ndis"
+HKR,,DeviceVxDs,,"r8139cp.sys"
+HKR,,EnumPropPages,,"netdi.dll,EnumPropPages"
+HKR,Ndi,DeviceID,,"PCI\VEN_10EC&DEV_8139"
+HKR,Ndi,HelpText,,%HelpText%
+HKR,Ndi\Install,ndis3,,"RTL8139CP.ndis3"
+HKR,Ndi\Interfaces,DefUpper,,"ndis3"
+HKR,Ndi\Interfaces,DefLower,,"ethernet"
+HKR,Ndi\Interfaces,UpperRange,,"ndis3"
+HKR,Ndi\Interfaces,LowerRange,,"ethernet"
+HKR,NDIS,LogDriverName,,"RTL8139CP"
+HKR,NDIS,MajorNdisVersion,1,03
+HKR,NDIS,MinorNdisVersion,1,00
+; PCI adapter (as in Realtek's own Windows 95 INF).
+HKR,,BusType,,5
+HKR,,AdapterType,,5
+HKR,,MediaType,,1
+
+; Advanced properties. Values are stored as strings in the adapter key;
+; the driver reads ConnectionType/VlanId as decimal integers and validates
+; them, failing initialization (event marker 8139d003/8139d004) when invalid.
+[RTL8139CP.params.reg]
+HKR,Ndi\params\ConnectionType,ParamDesc,,%ConnectionType%
+HKR,Ndi\params\ConnectionType,type,,enum
+HKR,Ndi\params\ConnectionType,default,,"0"
+HKR,Ndi\params\ConnectionType\enum,"0",,%Auto%
+HKR,Ndi\params\ConnectionType\enum,"1",,%Half10%
+HKR,Ndi\params\ConnectionType\enum,"2",,%Full10%
+HKR,Ndi\params\ConnectionType\enum,"3",,%Half100%
+HKR,Ndi\params\ConnectionType\enum,"4",,%Full100%
+HKR,,ConnectionType,,"0"
+HKR,Ndi\params\VlanId,ParamDesc,,%VlanId%
+HKR,Ndi\params\VlanId,type,,int
+HKR,Ndi\params\VlanId,default,,"0"
+HKR,Ndi\params\VlanId,min,,"0"
+HKR,Ndi\params\VlanId,max,,"4094"
+HKR,Ndi\params\VlanId,step,,"1"
+HKR,,VlanId,,"0"
+HKR,Ndi\params\NetworkAddress,ParamDesc,,%NetworkAddress%
+HKR,Ndi\params\NetworkAddress,type,,edit
+HKR,Ndi\params\NetworkAddress,LimitText,,"12"
+HKR,Ndi\params\NetworkAddress,UpperCase,,"1"
+HKR,Ndi\params\NetworkAddress,optional,,"1"
+HKR,Ndi\params\NetworkAddress,default,,""
+
+[RTL8139CP.ndis3]
+CopyFiles=RTL8139CP.Files
+
+[DestinationDirs]
+DefaultDestDir=11
+RTL8139CP.Files=11
+
+[RTL8139CP.Files]
+r8139cp.sys
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+r8139cp.sys=1
+
+[Strings]
+Provider="RTL8139C+ open driver"
+Description="Realtek RTL8139C+ PCI Fast Ethernet (open NDIS 3 driver)"
+Disk="RTL8139C+ Windows 95 driver disk"
+HelpText="Open-source NDIS 3 miniport for the RTL8139C+."
+ConnectionType="Connection Type"
+Auto="Auto-negotiate"
+Half10="10 Mbps half duplex"
+Full10="10 Mbps full duplex"
+Half100="100 Mbps half duplex"
+Full100="100 Mbps full duplex"
+VlanId="VLAN ID (0 = disabled)"
+NetworkAddress="Network Address"
