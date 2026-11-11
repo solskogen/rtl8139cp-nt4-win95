@@ -12,11 +12,11 @@ machine you can recover. Please report results (see the end of this file).
 | Package | Target | Installer |
 |---------|--------|-----------|
 | `dist/nt4/` | Windows NT 4.0 SP6a x86 | `OEMSETUP.INF` (Network Control Panel script) |
-| `dist/win95/` | Windows 95 OSR2 x86 | `r8139cp.inf` (Net class, `Have Disk`) |
+| `dist/win9x/` | Windows 95 OSR2, 98 and ME x86 | `r8139cp.inf` (Net class, `Have Disk`) |
 
 `make floppy` writes `dist/rtl8139cp-floppy.img`, a 1.44 MB FAT12 disk with
-both packages: use `A:\NT4` for Windows NT 4.0 and `A:\WIN95` for Windows 95
-as the Have Disk path. Installer and driver files have 8.3 names.
+both packages: use `A:\NT4` for Windows NT 4.0 and `A:\WIN9X` for Windows 95, 98 and
+ME as the Have Disk path. Installer and driver files have 8.3 names.
 
 The disk is deliberately not bootable. Its boot sector has no `0x55AA`
 signature, so a BIOS that checks it skips the floppy and boots the next
@@ -26,7 +26,7 @@ absent; if there is no bootable hard disk it asks for the floppy to be
 removed and restarts on a key press. `make test-floppy` checks all three
 cases in QEMU. Windows NT's FAT driver recognizes the volume by its jump
 instruction and BPB, not the signature; Windows 95 also reads it (driver
-installed from `A:\WIN95` in the QEMU test).
+installed from the floppy in the QEMU test).
 
 It is an NDIS 3.0 serialized miniport, imports only `NDIS.SYS` and is
 compiled for i486 without a CRT or floating point.
@@ -59,12 +59,17 @@ type, VLAN ID and network address. Values are checked before anything is
 saved; Cancel in any dialog leaves the settings unchanged. Reboot when NT
 asks. Removal uses Network > Adapters > Remove.
 
-### Windows 95 OSR2
+### Windows 95 OSR2, Windows 98 and Windows ME
+
+The same `r8139cp.sys` and `r8139cp.inf` serve all three. Windows 98 and ME load
+NDIS miniports through NTKERN (it adds `NTMPDriver` to the adapter key)
+rather than NDIS.VXD's own loader, so the image is linked with section
+alignment equal to file alignment (0x200), as Realtek's drivers are.
 
 1. Let the New Hardware wizard find the PCI Ethernet controller, or use
    Device Manager > Other devices > PCI Ethernet Controller > Properties >
    Driver > Change Driver.
-2. **Have Disk**, point to `dist\win95` or `A:\WIN95`, select the RTL8139C+
+2. **Have Disk**, point to `dist\win9x` or `A:\WIN9X`, select the RTL8139C+
    entry.
 3. Reboot when asked. Settings are on the adapter's **Advanced** tab.
 
@@ -75,6 +80,15 @@ not already installed.
 Do not use Control Panel > Network > Add > Adapter: that installs a
 separate, non-PCI adapter that gets no I/O port or interrupt, so the driver
 cannot start. If it was added that way, remove it there first.
+
+Windows ME (and any system with Realtek's `netrtsnt.inf`) binds its own
+Realtek driver to the card automatically: that INF lists
+`PCI\VEN_10EC&DEV_8139&SUBSYS_813910EC` and other subsystem IDs, which
+outrank this INF's generic ID, so an automatic driver search keeps
+Realtek's driver. Use Device Manager > Network adapters > the Realtek
+adapter > Properties > Driver > Update Driver > *Specify the location of
+the driver (Advanced)* > *Display a list of all the drivers* > **Have Disk**
+and pick the RTL8139C+ (open NDIS 3 driver) entry.
 
 ## Configuration
 
@@ -131,7 +145,7 @@ Supported OIDs: `GEN_SUPPORTED_LIST`, `HARDWARE_STATUS`, `MEDIA_SUPPORTED`,
   no NDIS offload negotiation, so nothing is advertised.
 - Wake-on-LAN and power management (no NDIS 3 power contract).
 - Jumbo frames, multiple VLANs per adapter, classic (non-C+) RTL8139 chips.
-- Windows 98/ME/2000 and later are not targets (untested; NDIS 3 binaries
+- Windows 2000 and later are not targets (untested; NDIS 3 binaries
   may or may not load there).
 
 ## Error log markers

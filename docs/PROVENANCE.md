@@ -101,3 +101,12 @@ listed runtime risk.
 
 Tally-counter dump (`DTCCR`) semantics come from the RTL8139C+ datasheet
 section 6.3 and agree with QEMU's `rtl8139_TxStatus_write`.
+
+## Windows 9x reference material
+
+Section and file alignment of Realtek's own Windows 95, 98 and ME drivers,
+the exports of Windows 98 SE and ME `NDIS.VXD`, and the hardware IDs in
+Windows ME's in-box `netrtsnt.inf` were observed from the user's own
+installation media and driver downloads. Only those facts are used: no
+Microsoft or Realtek file is redistributed or copied.
+

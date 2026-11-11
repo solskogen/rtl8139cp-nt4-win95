@@ -105,6 +105,9 @@ def check(path, objdump):
     assert struct.unpack_from("<H", image, opt + 68)[0] == 1, "not native subsystem"
     assert struct.unpack_from("<HH", image, opt + 40) == (4, 0), "OS version"
     assert struct.unpack_from("<HH", image, opt + 48) == (4, 0), "subsystem version"
+    section_align, file_align = struct.unpack_from("<II", image, opt + 32)
+    assert section_align == file_align == 0x200, \
+        "section alignment must equal file alignment (Windows 98 loader)"
     assert struct.unpack_from("<I", image, opt + 64)[0] == \
         pe_checksum(image, opt + 64), "PE checksum"
     reloc_rva, reloc_size = struct.unpack_from("<II", image, opt + 96 + 5 * 8)

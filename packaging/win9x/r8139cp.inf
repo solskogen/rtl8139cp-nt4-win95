@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: MIT
-; RTL8139C+ NDIS 3 miniport for Windows 95 OSR2.
+; RTL8139C+ NDIS 3 miniport for Windows 95 OSR2, 98 and ME.
 ; Install on the PCI device (New Hardware wizard or Device Manager >
 ; Change Driver), "Have Disk". Not via Network > Add: that creates an
 ; adapter without PCI resources.

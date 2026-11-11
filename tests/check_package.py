@@ -32,7 +32,7 @@ def main():
         check_floppy(args.floppy)
         return
     check_nt4_driver()
-    check_win95_driver()
+    check_win9x_driver()
     if args.dist:
         check_driver_dist()
 
@@ -200,8 +200,8 @@ def check_nt4_driver():
     print(f"{path}: NCPA script structure, net rules and parameters passed")
 
 
-def check_win95_driver():
-    path = pathlib.Path("packaging/win95/r8139cp.inf")
+def check_win9x_driver():
+    path = pathlib.Path("packaging/win9x/r8139cp.inf")
     raw = path.read_bytes()
     assert raw.count(b"\n") == raw.count(b"\r\n"), path
     data = sections(path)
@@ -242,7 +242,7 @@ def check_win95_driver():
 
 
 def check_driver_dist():
-    for target, inf in (("nt4", "OEMSETUP.INF"), ("win95", "r8139cp.inf")):
+    for target, inf in (("nt4", "OEMSETUP.INF"), ("win9x", "r8139cp.inf")):
         directory = pathlib.Path(f"dist/{target}")
         for relative, original in (
             ("r8139cp.sys", pathlib.Path("build/r8139cp.sys")),
@@ -274,8 +274,8 @@ def check_floppy(image):
     expected = {
         "NT4/OEMSETUP.INF": "dist/nt4/OEMSETUP.INF",
         "NT4/R8139CP.SYS": "dist/nt4/r8139cp.sys",
-        "WIN95/R8139CP.INF": "dist/win95/r8139cp.inf",
-        "WIN95/R8139CP.SYS": "dist/win95/r8139cp.sys",
+        "WIN9X/R8139CP.INF": "dist/win9x/r8139cp.inf",
+        "WIN9X/R8139CP.SYS": "dist/win9x/r8139cp.sys",
     }
     for name in expected:
         for part in name.split("/"):

@@ -12,6 +12,8 @@ both systems load, plus an installer for each system.
 | Windows NT 4.0 in 86Box (RTL8139C+ model) | Installs and works |
 | Windows 95 OSR2.5 in QEMU (`rtl8139`) | Installs and works: DHCP, ping, HTTP download verified by SHA-256 |
 | Physical RTL8139C+ cards | Not yet tested |
+| Windows 98 SE in 86Box | Not yet confirmed: the 0x200 section-alignment build is untested there |
+| Windows ME | Not yet tested (NDIS 4.90 exports every import; loads miniports like Windows 98) |
 | Other Windows 95 builds, Windows 95 in 86Box | Not yet tested |
 
 Reports from real hardware are welcome; see "Reporting results" in
@@ -31,10 +33,12 @@ published. Then:
 
 - **Windows NT 4.0 SP6a:** Control Panel > Network > Adapters > Add >
   Have Disk, and point it at `A:\NT4`.
-- **Windows 95 OSR2:** Device Manager > Other devices > PCI Ethernet
+- **Windows 95 OSR2 / 98 / ME:** Device Manager > Other devices > PCI Ethernet
   Controller > Properties > Driver > Change Driver > Have Disk, and point
-  it at `A:\WIN95`. Install it on the PCI device, not through
-  Network > Add, otherwise the adapter gets no PCI resources.
+  it at `A:\WIN9X`. Install it on the PCI device, not through
+  Network > Add, otherwise the adapter gets no PCI resources. Windows ME
+  installs its own Realtek driver automatically; replace it as described
+  in docs/DRIVER.md.
 
 [docs/DRIVER.md](docs/DRIVER.md) has the full instructions, configuration
 keywords (`ConnectionType`, `VlanId`, `NetworkAddress`), event-log error
@@ -50,7 +54,7 @@ QEMU tests.
 ```sh
 make            # build/r8139cp.sys
 make check      # run the tests
-make package    # dist/nt4 and dist/win95
+make package    # dist/nt4 and dist/win9x
 make floppy     # dist/rtl8139cp-floppy.img
 make help       # all targets
 ```

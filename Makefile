@@ -15,10 +15,13 @@ KERNEL = $(COMMON) -Icompat -O2 -march=i486 -mtune=i486 \
 	-msoft-float -mno-sse -mno-mmx -ffreestanding -fno-builtin \
 	-fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
 	-fno-ident -fno-strict-aliasing -Wstack-usage=1536
+# Section alignment equals file alignment (RVA == file offset), as in
+# Realtek's NT4/Win95/Win98 drivers: Windows 98 loads NDIS miniports through
+# NTKERN (NTMPDriver), not NDIS.VXD's own loader as Windows 95 does.
 PE_FLAGS = -mi386pe --subsystem native --major-subsystem-version 4 \
 	--minor-subsystem-version 0 --major-os-version 4 --minor-os-version 0 \
 	--entry _DriverEntry@8 --image-base 0x10000 --file-alignment 0x200 \
-	--section-alignment 0x1000 --disable-dynamicbase --disable-nxcompat \
+	--section-alignment 0x200 --disable-dynamicbase --disable-nxcompat \
 	--enable-reloc-section --no-insert-timestamp
 
 .PHONY: all drivers test test-qemu coverage check package floppy test-floppy clean \
@@ -42,8 +45,8 @@ build/miniport.o: $(MINIPORT_DEPS) | build
 build/core-i486.o: src/core/rtl8139.c include/rtl8139.h | build
 	$(TARGET_CC) $(KERNEL) -c $< -o $@
 
-build/r8139cp.sys: build/miniport.o build/core-i486.o build/ndis-miniport.a
-	$(TARGET_LD) $(PE_FLAGS) -Map $(@:.sys=.map) -o $@ $^
+build/r8139cp.sys: build/miniport.o build/core-i486.o build/ndis-miniport.a Makefile
+	$(TARGET_LD) $(PE_FLAGS) -Map $(@:.sys=.map) -o $@ $(filter-out Makefile,$^)
 
 build/test-core: tests/test_core.c src/core/rtl8139.c include/rtl8139.h | build
 	$(HOST_CC) $(COMMON) -O1 -g -fsanitize=address,undefined \
@@ -97,18 +100,18 @@ check: drivers test build/analyzed
 	$(PYTHON) tests/check_package.py
 
 package: check
-	mkdir -p dist/nt4/docs dist/win95/docs
+	mkdir -p dist/nt4/docs dist/win9x/docs
 	cp build/r8139cp.sys packaging/nt4/OEMSETUP.INF dist/nt4/
-	cp build/r8139cp.sys packaging/win95/r8139cp.inf dist/win95/
+	cp build/r8139cp.sys packaging/win9x/r8139cp.inf dist/win9x/
 	cp README.md LICENSE dist/nt4/
-	cp README.md LICENSE dist/win95/
+	cp README.md LICENSE dist/win9x/
 	cp docs/DRIVER.md docs/PROVENANCE.md dist/nt4/docs/
-	cp docs/DRIVER.md docs/PROVENANCE.md dist/win95/docs/
+	cp docs/DRIVER.md docs/PROVENANCE.md dist/win9x/docs/
 	$(PYTHON) tests/check_package.py --dist
 	cd dist && sha256sum nt4/*.* nt4/LICENSE nt4/docs/* \
-		win95/*.* win95/LICENSE win95/docs/* > SHA256SUMS
+		win9x/*.* win9x/LICENSE win9x/docs/* > SHA256SUMS
 
-# 1.44 MB FAT12 driver disk: A:\NT4 (OEMSETUP.INF) and A:\WIN95 (r8139cp.inf).
+# 1.44 MB FAT12 driver disk: A:\NT4 (OEMSETUP.INF) and A:\WIN9X (r8139cp.inf).
 FLOPPY = dist/rtl8139cp-floppy.img
 floppy: $(FLOPPY)
 
@@ -122,9 +125,9 @@ $(FLOPPY): package build/floppy-boot.bin
 	$(RM) $@
 	mformat -C -i $@ -f 1440 -v RTL8139CP -N 8139C0DE ::
 	dd if=build/floppy-boot.bin of=$@ bs=1 seek=62 count=450 conv=notrunc status=none
-	mmd -i $@ ::/NT4 ::/WIN95 ::/DOCS
+	mmd -i $@ ::/NT4 ::/WIN9X ::/DOCS
 	mcopy -i $@ -m dist/nt4/OEMSETUP.INF dist/nt4/r8139cp.sys ::/NT4/
-	mcopy -i $@ -m dist/win95/r8139cp.inf dist/win95/r8139cp.sys ::/WIN95/
+	mcopy -i $@ -m dist/win9x/r8139cp.inf dist/win9x/r8139cp.sys ::/WIN9X/
 	mcopy -i $@ -m README.md LICENSE ::/
 	mcopy -i $@ -m docs/DRIVER.md docs/PROVENANCE.md ::/DOCS/
 	$(PYTHON) tests/check_package.py --floppy $@
@@ -143,7 +146,7 @@ help:
 	@echo '  test-qemu  shared C core against QEMU'"'"'s RTL8139C+ model'
 	@echo '             (needs qemu-system-i386)'
 	@echo '  coverage   line coverage of the host tests (gcov)'
-	@echo '  package    check, then create dist/{nt4,win95}/ and dist/SHA256SUMS'
+	@echo '  package    check, then create dist/{nt4,win9x}/ and dist/SHA256SUMS'
 	@echo '  floppy     package, then create $(FLOPPY) (needs mtools)'
 	@echo '  test-floppy  floppy, then boot it in QEMU to verify it is not'
 	@echo '             bootable (needs qemu-system-i386)'
@@ -157,5 +160,5 @@ help:
 
 clean:
 	$(RM) -r build
-	$(RM) -r dist/nt4 dist/win95
+	$(RM) -r dist/nt4 dist/win9x
 	$(RM) dist/SHA256SUMS $(FLOPPY)
