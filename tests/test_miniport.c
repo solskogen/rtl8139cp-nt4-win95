@@ -29,12 +29,17 @@ static struct {
     uint32_t tctr;
     unsigned tx_index, rx_index;
     int gone, tx_stuck, reset_stuck, cplus;
+    int tally_survives_reset; /* reset leaves the tally counters intact */
+    unsigned reset_stuck_after; /* resets that complete before it sticks */
+    int bus_master_at_autoload;
     unsigned resets, autoloads;
     uint8_t eeprom[6];
     struct rtl_tally tally;
     struct frame sent[256];
     unsigned sent_count;
 } chip;
+
+static uint8_t pci_space[256]; /* PCI configuration, defined below */
 
 static const uint8_t eeprom_mac[6] = {0x00, 0xe0, 0x4c, 0x81, 0x39, 0x01};
 
@@ -167,7 +172,8 @@ void port_out8(uint32_t port, uint8_t v)
         return;
     if (r == RTL_COMMAND && (v & 0x10)) {
         ++chip.resets;
-        if (chip.reset_stuck) {
+        if (chip.reset_stuck ||
+            (chip.reset_stuck_after && chip.resets > chip.reset_stuck_after)) {
             chip.regs[r] = 0x10;
             return;
         }
@@ -176,9 +182,11 @@ void port_out8(uint32_t port, uint8_t v)
         set16(RTL_CPLUS_COMMAND, 0);
         chip.regs[r] = 0;
         chip.tx_index = chip.rx_index = 0;
-        memset(&chip.tally, 0, sizeof(chip.tally));
+        if (!chip.tally_survives_reset)
+            memset(&chip.tally, 0, sizeof(chip.tally));
     } else if (r == RTL_CONFIG_LOCK && (v & 0xc0) == 0x40) {
         ++chip.autoloads;
+        chip.bus_master_at_autoload = pci_space[4] & 4;
         memcpy(chip.regs, chip.eeprom, 6);
         chip.regs[r] = 0;
     } else if (r == RTL_TX_POLL) {
@@ -232,6 +240,7 @@ static int interrupt_line(void)
 
 static uint8_t pci_space[256];
 static int pci_write_ignored; /* bridge drops command-register writes */
+static int pci_bus_master_ignored; /* bridge drops bus-master enables */
 
 static void pci_reset(void)
 {
@@ -401,9 +410,19 @@ uint32_t NdisReadPciSlotInformation(ndis_handle h, uint32_t slot, uint32_t off,
 uint32_t NdisWritePciSlotInformation(ndis_handle h, uint32_t slot, uint32_t off,
                                      void *buffer, uint32_t length)
 {
-    assert(h == block && slot == SLOT && off == 4 && length == 2);
-    if (!pci_write_ignored)
+    uint16_t value;
+    assert(h == block && slot == SLOT && (off == 4 || off == 6) && length == 2);
+    memcpy(&value, buffer, 2);
+    if (pci_write_ignored || (off == 4 && (value & 4) && pci_bus_master_ignored))
+        return length;
+    if (off == 6) { /* status: error bits are write-one-to-clear */
+        uint16_t status = (uint16_t)(pci_space[6] | pci_space[7] << 8);
+        status = (uint16_t)(status & ~(value & 0xf900));
+        pci_space[6] = (uint8_t)status;
+        pci_space[7] = (uint8_t)(status >> 8);
+    } else {
         memcpy(pci_space + off, buffer, length);
+    }
     return length;
 }
 
@@ -646,7 +665,7 @@ static void reset_world(void)
     interrupt_fail = port_fail = memory_fail = 0;
     config_fail = assign_fail = assign_null = map_fail = 0;
     transfer_null_va = 0;
-    pci_write_ignored = 0;
+    pci_write_ignored = pci_bus_master_ignored = 0;
     address_length = 0;
     indications = indication_completes = resources_available = 0;
     transfer_offset = -1;
@@ -775,8 +794,10 @@ static void test_initialize(void)
     assert(chip.autoloads == 1);
     assert(reg16(RTL_INTERRUPT_MASK) == ENABLED);
     assert((pci_command_value() & 5) == 5);
+    /* Bus mastering stays off until identify has reset the chip. */
+    assert(!chip.bus_master_at_autoload && chip.resets >= 2);
     assert(!memcmp(chip.regs, eeprom_mac, 6));
-    assert(reg16(RTL_CPLUS_COMMAND) == 3 && chip.regs[RTL_COMMAND] == 0x0c);
+    assert(reg16(RTL_CPLUS_COMMAND) == 0x0b && chip.regs[RTL_COMMAND] == 0x0c);
     assert((reg32(RTL_RX_CONFIG) & 0x3f) == 0);
     assert(reg16(RTL_BMCR) == 0x1200);
     assert(shutdown_live == 1 && shutdown_context == adapter);
@@ -850,6 +871,31 @@ static void test_queries(void)
     assert(chip.tally.tx_one_collision == 0);
     chip.tally.tx_one_collision = 1;
     assert(query32(OID_802_3_XMIT_ONE_COLLISION) == 5);
+    halt();
+
+    /* A chip whose reset keeps its counters is not double counted. */
+    reset_world();
+    chip.tally_survives_reset = 1;
+    chip.tally.tx_one_collision = 10; /* left from before the driver */
+    assert(initialize() == NDIS_STATUS_SUCCESS);
+    assert(query32(OID_802_3_XMIT_ONE_COLLISION) == 0);
+    chip.tally.tx_one_collision = 14;
+    {
+        ndis_boolean addressing = 9;
+        assert(chars.reset(&addressing, adapter) == NDIS_STATUS_SUCCESS);
+    }
+    assert(chip.tally.tx_one_collision == 14);
+    assert(query32(OID_802_3_XMIT_ONE_COLLISION) == 4);
+    chip.tally.tx_one_collision = 15;
+    assert(query32(OID_802_3_XMIT_ONE_COLLISION) == 5);
+    /* The 16-bit missed-packet counter wraps between samples. */
+    chip.tally.rx_missed = 0xfffe;
+    {
+        ndis_boolean addressing = 9;
+        assert(chars.reset(&addressing, adapter) == NDIS_STATUS_SUCCESS);
+    }
+    chip.tally.rx_missed = 3;
+    assert(query32(OID_GEN_RCV_NO_BUFFER) == 0xfffe + 5);
     halt();
 }
 
@@ -1115,7 +1161,10 @@ static void test_link_and_errors(void)
     assert(query32(OID_GEN_HARDWARE_STATUS) == 4);
     assert(send_frame(f, 60) == NDIS_STATUS_FAILURE);
     assert(chars.check_for_hang(adapter));
+    pci_space[7] = 0xf9; /* latched SERR/abort/parity status bits */
+    pci_space[6] = 0x10; /* capabilities list: read only */
     assert(chars.reset(&addressing, adapter) == NDIS_STATUS_SUCCESS);
+    assert(pci_space[7] == 0 && pci_space[6] == 0x10);
     assert(reg16(RTL_INTERRUPT_MASK) == ENABLED);
     chars.disable_interrupt(adapter);
     assert(!reg16(RTL_INTERRUPT_MASK));
@@ -1345,6 +1394,20 @@ static void test_failures(void)
     resets = chip.resets;
     expect_failure(NDIS_STATUS_FAILURE, NDIS_ERROR_INTERRUPT_CONNECT, 16);
     assert(chip.resets > resets);
+
+    /* Bus mastering that cannot be enabled after identify. */
+    reset_world();
+    pci_bus_master_ignored = 1;
+    expect_failure(NDIS_STATUS_ADAPTER_NOT_FOUND, NDIS_ERROR_ADAPTER_NOT_FOUND, 11);
+    assert(chip.autoloads == 1);
+
+    /* Reset completes at identify but not at start: hardware failure, and
+     * bus mastering is revoked before the DMA memory is released. */
+    reset_world();
+    chip.reset_stuck_after = 1;
+    expect_failure(NDIS_STATUS_FAILURE, NDIS_ERROR_HARDWARE_FAILURE, 15);
+    assert((pci_command_value() & 4) == 0);
+    assert_released();
 
     /* A chip that never leaves reset loses bus mastering before release. */
     reset_world();

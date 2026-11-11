@@ -48,14 +48,38 @@ static uint32_t multicast_hash(const uint8_t mac[6])
     return crc >> 26;
 }
 
+/* Software reset: stops both DMA engines and clears the C+ command. */
+static enum rtl_result reset_bus(const struct rtl_bus *b)
+{
+    unsigned retry;
+    b->write16(b->context, RTL_INTERRUPT_MASK, 0);
+    b->write8(b->context, RTL_COMMAND, 0x10);
+    for (retry = 0; retry < 1000; ++retry) {
+        uint8_t command = b->read8(b->context, RTL_COMMAND);
+        if (command == UINT8_MAX)
+            return RTL_IO_ERROR;
+        if (!(command & 0x10)) {
+            b->write16(b->context, RTL_CPLUS_COMMAND, 0);
+            b->barrier(b->context);
+            return RTL_OK;
+        }
+        b->stall_us(b->context, 10);
+    }
+    return RTL_TIMEOUT;
+}
+
 enum rtl_result rtl_identify(const struct rtl_bus *b, uint8_t mac[6])
 {
     unsigned i;
+    enum rtl_result result;
     uint32_t tx_config = b->read32(b->context, RTL_TX_CONFIG);
     if (tx_config == UINT32_MAX)
         return RTL_IO_ERROR;
     if (!is_cplus(tx_config))
         return RTL_UNSUPPORTED;
+    result = reset_bus(b);
+    if (result != RTL_OK)
+        return result;
     /* 9346CR auto-load takes about 2 ms and then returns to normal mode. */
     b->write8(b->context, RTL_CONFIG_LOCK, 0x40);
     for (i = 0; i < 2000; ++i) {
@@ -123,19 +147,7 @@ enum rtl_result rtl_init(struct rtl_device *d, const struct rtl_bus *bus,
 
 static enum rtl_result reset(struct rtl_device *d)
 {
-    unsigned retry;
-    struct rtl_bus *b = &d->bus;
-    b->write16(b->context, RTL_INTERRUPT_MASK, 0);
-    b->write8(b->context, RTL_COMMAND, 0x10);
-    for (retry = 0; retry < 1000; ++retry) {
-        if (!(b->read8(b->context, RTL_COMMAND) & 0x10)) {
-            b->write16(b->context, RTL_CPLUS_COMMAND, 0);
-            b->barrier(b->context);
-            return RTL_OK;
-        }
-        b->stall_us(b->context, 10);
-    }
-    return RTL_TIMEOUT;
+    return reset_bus(&d->bus);
 }
 
 enum rtl_result rtl_stop(struct rtl_device *d)
@@ -176,16 +188,21 @@ enum rtl_result rtl_start(struct rtl_device *d)
         rx->status = RTL_OWN | end | RTL_BUFFER_SIZE;
     }
     b->barrier(b->context);
-    b->write16(b->context, RTL_CPLUS_COMMAND, 3);
-    /* The data sheet requires C+ enable, then command, then ring/config
-     * registers. Keep receive filtering off until all addresses are valid. */
-    b->write8(b->context, RTL_COMMAND, 0x0c);
+    /* C+ Tx/Rx and PCI multiple read/write. C+CR comes before every other
+     * C+ register (datasheet 6.33). The ring addresses then precede TE/RE,
+     * unlike the datasheet's suggested order: a reset may leave RDSAR at
+     * zero, and an enabled receiver must never fetch descriptors from there.
+     * Receive filtering stays off until rtl_set_filter. */
+    b->write16(b->context, RTL_CPLUS_COMMAND, 0x0b);
     b->write32(b->context, RTL_TX_RING, d->dma.tx_ring_bus);
     b->write32(b->context, RTL_TX_RING + 4, 0);
     b->write32(b->context, RTL_TX_HIGH_RING, 0);
     b->write32(b->context, RTL_TX_HIGH_RING + 4, 0);
     b->write32(b->context, RTL_RX_RING, d->dma.rx_ring_bus);
     b->write32(b->context, RTL_RX_RING + 4, 0);
+    b->barrier(b->context);
+    b->write8(b->context, RTL_COMMAND, 0x0c);
+    /* TCR/RCR are written after TE/RE are set. */
     b->write32(b->context, RTL_TX_CONFIG, UINT32_C(0x03000600));
     b->write32(b->context, RTL_RX_CONFIG, UINT32_C(0x0000a400));
     b->write16(b->context, RTL_INTERRUPT_MITIGATION, 0);
@@ -347,7 +364,7 @@ unsigned rtl_reap_tx(struct rtl_device *d)
         if (status & RTL_OWN)
             break;
         d->bus.barrier(d->bus.context);
-        if (status & RTL_TX_ERROR)
+        if (status & (RTL_TX_ERROR | RTL_TX_UNDERRUN))
             ++d->stats.tx_error;
         else
             ++d->stats.tx_ok;
@@ -373,7 +390,8 @@ unsigned rtl_poll_rx(struct rtl_device *d, unsigned budget,
         if (status & RTL_OWN)
             break;
         d->bus.barrier(d->bus.context);
-        if ((status & (RTL_FS | RTL_LS | RTL_RX_ERROR)) != (RTL_FS | RTL_LS) ||
+        if ((status & (RTL_FS | RTL_LS | RTL_RX_ERROR | RTL_RX_FIFO_ERROR)) !=
+                (RTL_FS | RTL_LS) ||
             size < 18 || size > RTL_MAX_TAGGED_FRAME + 4) {
             ++d->stats.rx_error;
         } else {
@@ -422,16 +440,19 @@ enum rtl_result rtl_dump_tally(struct rtl_device *d, struct rtl_tally *out)
     b->barrier(b->context);
     b->write32(b->context, RTL_TALLY_COMMAND + 4, 0);
     b->write32(b->context, RTL_TALLY_COMMAND, d->dma.tally_bus | 0x08);
-    for (retry = 0; retry < 100; ++retry) {
+    for (retry = 0; retry < 1000; ++retry) {
         uint32_t command = b->read32(b->context, RTL_TALLY_COMMAND);
         if (command == UINT32_MAX)
             return RTL_IO_ERROR;
         if (!(command & 0x08)) {
             b->barrier(b->context);
             *out = *(const struct rtl_tally *)(uintptr_t)d->dma.tally;
-            return RTL_OK;
+            break;
         }
         b->stall_us(b->context, 10);
     }
-    return RTL_TIMEOUT;
+    /* Leave no dump address armed in the chip. */
+    b->write32(b->context, RTL_TALLY_COMMAND, 0);
+    b->write32(b->context, RTL_TALLY_COMMAND + 4, 0);
+    return retry < 1000 ? RTL_OK : RTL_TIMEOUT;
 }

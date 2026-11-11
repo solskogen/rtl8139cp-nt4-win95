@@ -12,6 +12,7 @@ struct model {
     unsigned cplus_order;
     unsigned command_order;
     unsigned ring_order;
+    unsigned rx_ring_order;
     unsigned order;
     int reset_stuck;
     int autoload_stuck;
@@ -93,7 +94,7 @@ static void write16(void *ctx, unsigned reg, uint16_t value)
     assert(reg >= RTL_TALLY_COMMAND);
     store8(ctx, reg, (uint8_t)value);
     store8(ctx, reg + 1, (uint8_t)(value >> 8));
-    if (reg == RTL_CPLUS_COMMAND && value == 3)
+    if (reg == RTL_CPLUS_COMMAND && value == 0x0b)
         m->cplus_order = m->order;
 }
 
@@ -103,6 +104,8 @@ static void write32(void *ctx, unsigned reg, uint32_t value)
     unsigned i;
     if (reg == RTL_TX_RING)
         m->ring_order = m->order + 1;
+    if (reg == RTL_RX_RING)
+        m->rx_ring_order = m->order + 1;
     if (reg == RTL_TALLY_COMMAND && (value & 0x08) && !m->tally_stuck) {
         assert((value & ~UINT32_C(0x3f)) == 0x140000);
         assert(read32(ctx, RTL_TALLY_COMMAND + 4) == 0);
@@ -216,10 +219,13 @@ static void test_initialization(void)
 {
     unsigned i;
     setup(0);
-    assert(model.cplus_order < model.command_order);
-    assert(model.command_order < model.ring_order);
+    /* C+ enable, then both ring addresses, then TE/RE. */
+    assert(model.cplus_order && model.cplus_order < model.ring_order);
+    assert(model.cplus_order < model.rx_ring_order);
+    assert(model.ring_order < model.command_order);
+    assert(model.rx_ring_order < model.command_order);
     assert(read32(&model, RTL_RX_RING) == 0x100000);
-    assert(read16(&model, RTL_CPLUS_COMMAND) == 3);
+    assert(read16(&model, RTL_CPLUS_COMMAND) == 0x0b);
     assert(read16(&model, RTL_BMCR) == 0x1200);
     assert(read16(&model, RTL_INTERRUPT_MASK) == 0);
     for (i = 0; i < RTL_RING_COUNT; ++i) {
@@ -259,6 +265,21 @@ static void test_identify(void)
     assert(rtl_identify(&bus, mac) == RTL_OK);
     assert(!memcmp(mac, expected, 6));
     assert(model.autoload_reads == 3 && model.stalled == 20);
+    /* Identify stops DMA a boot ROM or previous OS left running. */
+    model.regs[RTL_COMMAND] = 0x0c;
+    model.regs[RTL_CPLUS_COMMAND] = 0x0b;
+    model.regs[RTL_INTERRUPT_MASK] = 0xff;
+    assert(rtl_identify(&bus, mac) == RTL_OK);
+    assert(model.regs[RTL_COMMAND] == 0 && read16(&model, RTL_CPLUS_COMMAND) == 0);
+    assert(read16(&model, RTL_INTERRUPT_MASK) == 0);
+    model.reset_stuck = 1;
+    model.autoload_reads = 0;
+    model.stalled = 0;
+    assert(rtl_identify(&bus, mac) == RTL_TIMEOUT);
+    assert(model.stalled == 10000 && model.autoload_reads == 0);
+    model.reset_stuck = 0;
+    model.regs[RTL_COMMAND] = 0;
+    model.stalled = 0;
     model.autoload_stuck = 1;
     model.stalled = 0;
     assert(rtl_identify(&bus, mac) == RTL_TIMEOUT);
@@ -289,10 +310,14 @@ static void test_tally(void)
     assert(rtl_start(&device) == RTL_OK);
     assert(rtl_dump_tally(&device, &out) == RTL_OK);
     assert(out.tx_one_collision == 7 && out.rx_alignment == 3);
+    /* No dump address is left armed afterwards. */
+    assert(read32(&model, RTL_TALLY_COMMAND) == 0);
+    assert(read32(&model, RTL_TALLY_COMMAND + 4) == 0);
     model.tally_stuck = 1;
     model.stalled = 0;
     assert(rtl_dump_tally(&device, &out) == RTL_TIMEOUT);
-    assert(model.stalled == 1000);
+    assert(model.stalled == 10000);
+    assert(read32(&model, RTL_TALLY_COMMAND) == 0);
     model.remove_on = RTL_TALLY_COMMAND;
     assert(rtl_dump_tally(&device, &out) == RTL_IO_ERROR);
 }
@@ -324,13 +349,15 @@ static void test_transmit(void)
             tx_ring[i].status &= ~RTL_OWN;
             if (i == 5)
                 tx_ring[i].status |= RTL_TX_ERROR;
+            if (i == 6) /* underrun is not part of the error summary */
+                tx_ring[i].status |= RTL_TX_UNDERRUN;
         }
         reaped += rtl_reap_tx(&device);
         assert(rtl_reap_tx(&device) == 0);
         assert(!device.tx_count);
     }
     assert(reaped == 192 && model.polls == 192);
-    assert(device.stats.tx_ok == 189 && device.stats.tx_error == 3);
+    assert(device.stats.tx_ok == 186 && device.stats.tx_error == 6);
     assert(rtl_stop(&device) == RTL_OK);
     assert(rtl_send(&device, frame, 60) == RTL_STOPPED);
 }
@@ -350,6 +377,8 @@ static void test_receive(void)
         rx_ring[6].status = RTL_FS | 64; /* fragmented packet */
         rx_ring[7].status = RTL_FS | RTL_LS | 17;
         rx_ring[8].status = RTL_FS | RTL_LS | 8191;
+        /* FIFO overflow is not part of the error summary. */
+        rx_ring[9].status |= RTL_RX_FIFO_ERROR;
         assert(rtl_poll_rx(&device, 1, received_frame, NULL) == 1);
         assert(device.rx_head == 1);
         assert(rtl_poll_rx(&device, 1000, received_frame, NULL) == 63);
@@ -358,7 +387,7 @@ static void test_receive(void)
         for (i = 0; i < RTL_RING_COUNT; ++i)
             assert(rx_ring[i].status & RTL_OWN);
     }
-    assert(received == 180 && device.stats.rx_error == 12);
+    assert(received == 177 && device.stats.rx_error == 15);
     assert(last_size == 60 && last_frame[0] == 63);
 }
 
@@ -475,6 +504,11 @@ static void test_interrupts(void)
     raise_interrupt(0x0200 | RTL_INT_SYSTEM_ERROR);
     assert(rtl_read_interrupts(&device, &pending) == RTL_OK);
     assert(pending == RTL_INT_SYSTEM_ERROR);
+    assert(rtl_ack_interrupts(&device, pending) == RTL_OK);
+    assert(read16(&model, RTL_INTERRUPT_STATUS) == 0x0200);
+    /* Bit 10 is documented reserved but raised by silicon: acknowledged. */
+    raise_interrupt(0x0400);
+    assert(rtl_read_interrupts(&device, &pending) == RTL_OK && pending == 0x0400);
     assert(rtl_ack_interrupts(&device, pending) == RTL_OK);
     assert(read16(&model, RTL_INTERRUPT_STATUS) == 0x0200);
     /* Surprise removal: all-ones status masks the chip and faults the core. */

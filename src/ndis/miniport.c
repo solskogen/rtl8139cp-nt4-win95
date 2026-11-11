@@ -75,6 +75,7 @@ struct adapter {
     struct shared_block chunks[CHUNK_COUNT];
     struct receive_context rx;
     struct counters counter_base;
+    struct counters tally_start;
     uint32_t io;
     void *io_mapped;
     uint32_t interrupt_level;
@@ -210,16 +211,32 @@ static void *ethernet_filter(struct adapter *a)
     return filter;
 }
 
-/* Running totals: hardware counters restart at every chip reset. */
+/* Running totals: counter_base plus the change since the snapshot taken at
+ * the last chip start. Differences are right whether or not a chip reset
+ * clears the hardware counters, and modular arithmetic absorbs one wrap of
+ * the 16-bit counters between samples. */
 static void read_counters(struct adapter *a, struct counters *out)
 {
     struct rtl_tally t;
+    const struct counters *s = &a->tally_start;
     *out = a->counter_base;
     if (rtl_dump_tally(&a->device, &t) == RTL_OK) {
-        out->rx_missed += t.rx_missed;
-        out->rx_alignment += t.rx_alignment;
-        out->tx_one_collision += t.tx_one_collision;
-        out->tx_multi_collision += t.tx_multi_collision;
+        out->rx_missed += (uint16_t)(t.rx_missed - s->rx_missed);
+        out->rx_alignment += (uint16_t)(t.rx_alignment - s->rx_alignment);
+        out->tx_one_collision += t.tx_one_collision - s->tx_one_collision;
+        out->tx_multi_collision += t.tx_multi_collision - s->tx_multi_collision;
+    }
+}
+
+static void snapshot_counters(struct adapter *a)
+{
+    struct rtl_tally t;
+    zero(&a->tally_start, sizeof(a->tally_start));
+    if (rtl_dump_tally(&a->device, &t) == RTL_OK) {
+        a->tally_start.rx_missed = t.rx_missed;
+        a->tally_start.rx_alignment = t.rx_alignment;
+        a->tally_start.tx_one_collision = t.tx_one_collision;
+        a->tally_start.tx_multi_collision = t.tx_multi_collision;
     }
 }
 
@@ -240,21 +257,31 @@ static int pci_read_command(struct adapter *a, uint16_t *command)
            *command != UINT16_MAX;
 }
 
+/* Sets and clears command bits, confirmed by reading the register back. */
 static int pci_command(struct adapter *a, uint16_t set, uint16_t clear)
 {
     uint16_t command;
     if (!pci_read_command(a, &command))
         return 0;
     command = (uint16_t)((command | set) & ~clear);
-    return NdisWritePciSlotInformation(a->handle, a->slot, 4, &command, 2) == 2;
+    return NdisWritePciSlotInformation(a->handle, a->slot, 4, &command, 2) == 2 &&
+           pci_read_command(a, &command) && (command & set) == set &&
+           !(command & clear);
 }
 
-/* Revokes bus mastering and confirms it by reading the command back. */
+/* Clears latched PCI status errors (write-one-to-clear, offset 6), e.g.
+ * after a system error interrupt. */
+static void pci_clear_status(struct adapter *a)
+{
+    uint16_t status = 0;
+    if (NdisReadPciSlotInformation(a->handle, a->slot, 6, &status, 2) == 2 &&
+        status != UINT16_MAX && (status & 0xf900))
+        (void)NdisWritePciSlotInformation(a->handle, a->slot, 6, &status, 2);
+}
+
 static int bus_master_off(struct adapter *a)
 {
-    uint16_t command;
-    return pci_command(a, 0, 4) && pci_read_command(a, &command) &&
-           !(command & 4);
+    return pci_command(a, 0, 4);
 }
 
 /* Stops all DMA. If neither a chip reset nor revoking bus mastering can be
@@ -488,9 +515,11 @@ static ndis_status setup(struct adapter *a, ndis_handle context, uint32_t *code,
         return status;
     a->port_registered = 1;
 
+    /* I/O decode on, bus mastering off: the chip may still be running DMA
+     * set up by a boot ROM or a previous OS until identify resets it. */
     *code = NDIS_ERROR_ADAPTER_NOT_FOUND;
     *step = STEP_PCI_COMMAND;
-    if (!pci_command(a, 5, 0))
+    if (!pci_command(a, 1, 4))
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
 
     *step = STEP_IDENTIFY;
@@ -513,6 +542,11 @@ static ndis_status setup(struct adapter *a, ndis_handle context, uint32_t *code,
         }
         copy(s.config.mac, a->permanent, 6);
     }
+
+    *code = NDIS_ERROR_ADAPTER_NOT_FOUND;
+    *step = STEP_PCI_COMMAND;
+    if (!pci_command(a, 4, 0))
+        return NDIS_STATUS_ADAPTER_NOT_FOUND;
 
     *code = NDIS_ERROR_OUT_OF_RESOURCES;
     *step = STEP_MAP_REGISTERS;
@@ -561,6 +595,7 @@ static ndis_status setup(struct adapter *a, ndis_handle context, uint32_t *code,
     if (rtl_start(&a->device) != RTL_OK ||
         rtl_set_filter(&a->device, 0, 0, 0) != RTL_OK)
         return NDIS_STATUS_FAILURE;
+    snapshot_counters(a);
     refresh_link(a);
     if (a->needs_reset)
         return NDIS_STATUS_FAILURE;
@@ -789,11 +824,13 @@ static ndis_status restart(struct adapter *a)
             a->dma_unsafe = 1;
         return NDIS_STATUS_HARD_ERRORS;
     }
+    pci_clear_status(a);
     /* Restores bus mastering if an earlier failed reset revoked it. */
     if (!pci_command(a, 5, 0) || rtl_start(&a->device) != RTL_OK ||
         rtl_set_filter(&a->device, a->filter & PACKET_FILTERS, a->multicast,
                        a->multicast_count) != RTL_OK)
         return NDIS_STATUS_HARD_ERRORS;
+    snapshot_counters(a);
     a->needs_reset = 0;
     a->hang_ticks = 0;
     refresh_link(a);

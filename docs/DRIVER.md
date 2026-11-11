@@ -124,7 +124,14 @@ entry instead of silently falling back to a default.
   set minimal).
 - Statistics: transmit/receive OK and error counts, receive no-buffer
   (missed + dropped), alignment errors, one/more collisions (hardware
-  tally counters, accumulated across resets).
+  tally counters, accumulated across resets as differences from a
+  snapshot taken at each chip start, so they are right whether or not a
+  reset clears the hardware counters). Receive FIFO overflows and transmit
+  underruns count as errors.
+- Start-up safety: bus mastering stays off until the chip has been reset,
+  so DMA left running by a boot ROM or a previous OS cannot reach memory;
+  ring addresses are programmed before the receiver and transmitter are
+  enabled.
 - Transmit-stall and fatal-bus-error detection via `CheckForHang`, with
   bounded reset; a device that disappears (all-ones reads) is stopped.
 - A shutdown handler stops DMA on system shutdown.
@@ -168,7 +175,7 @@ class (out of resources, adapter not found, ...).
 | 08 | I/O port resource | No 256-byte I/O BAR (memory-only configuration) |
 | 09 | Interrupt resource | No IRQ assigned (check BIOS "PnP OS"/IRQ settings) |
 | 0a | Register I/O range | Port range conflict |
-| 0b | PCI command | I/O decode and bus mastering could not be enabled through the slot calls |
+| 0b | PCI command | I/O decode or bus mastering could not be set (or read back as set) through the slot calls |
 | 0c | Identify | Not a C+ chip (adapter-not-found), or chip not responding (hardware failure) |
 | 0d | Map registers | Bus-master DMA unavailable |
 | 0e | Shared memory | Not enough contiguous DMA memory below 4 GB |
@@ -180,7 +187,8 @@ Diagnostic words (Event Viewer *Words* view, after `8139d0NN` and status):
 - Step 06: `SlotNumber` and the vendor/device ID read there (`813910ec`
   expected; `ffffffff` = nothing at that slot).
 - Step 0c: I/O base, the chip's `TxConfig` register (a C+ reads
-  `748xxxxx`/`74cxxxxx`; other values are classic RTL8139 variants, which
+  `748xxxxx`; other values, e.g. `740` RTL8139C, `744` RTL8139D or
+  `74c` RTL8101, are chips which
   this driver does not support) and `SlotNumber`.
 
 ## Known risks (please report)

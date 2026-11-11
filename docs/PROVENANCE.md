@@ -102,6 +102,43 @@ listed runtime risk.
 Tally-counter dump (`DTCCR`) semantics come from the RTL8139C+ datasheet
 section 6.3 and agree with QEMU's `rtl8139_TxStatus_write`.
 
+## Hardware facts compared with Linux 7.3
+
+At the user's request the driver was compared with Linux `v7.3`
+`drivers/net/ethernet/realtek/8139cp.c` (identical in `v7.4-rc2` apart
+from NAPI interrupt masking). Its header notice reads, in part: "This file
+is not a complete program and may only be used when the entire operating
+system is licensed under the GPL."
+
+- https://raw.githubusercontent.com/torvalds/linux/v7.3/drivers/net/ethernet/realtek/8139cp.c
+
+No Linux code, comment text or structure was copied, translated or
+paraphrased into the project. Only the hardware behaviour below was taken
+as facts and implemented in original code and wording. Each item is listed
+with the independent source that covers it, where one exists:
+
+| Fact | Independent confirmation |
+|------|--------------------------|
+| Rx descriptor bit 22 reports a FIFO overflow and is not part of the bit-20 error summary | Datasheet Rx status descriptor: `FOVF` is bit 22, and `RES` covers only CRC, RUNT, RWT and FAE. The datasheet says the overflow occurred before the packet; dropping such frames (rather than delivering them) is a conservative design choice |
+| Tx descriptor bit 25 is a FIFO underrun outside the bit-23 summary | Datasheet Tx status descriptor (`UNF`); QEMU v11.1.2 defines both bits |
+| Write ring addresses after C+CR and before TE/RE (TCR/RCR after TE/RE) | Datasheet 6.33 recommends TE/RE before ring addresses; QEMU v11.1.2 clears the Rx ring address on reset and declines to receive while it is zero, which shows the hazard of the datasheet order |
+| C+CR bit 3 enables PCI multiple read/write | Datasheet 6.33; QEMU treats the bit as writable |
+| ISR bit 10 can be raised although documented reserved | None: Linux is the only source. Acknowledging it is harmless if it never fires |
+| A tally dump may take longer than 1 ms; clear `DTCCR` afterwards | None: the 10 ms bound and the clearing follow Linux. Both only bound a wait and disarm a register |
+
+Resetting the chip with bus mastering off before use, reading PCI command
+writes back, clearing PCI status errors on reset and computing tally
+counters as differences are the project's own design.
+
+## 86Box reference
+
+The user's local 86Box checkout (commit
+`bf2f665b80c493a9441121a59d5d87816960e9b8`, `src/network/net_rtl8139.c`,
+GPL-2.0, derived from QEMU's model) was read only to see how that emulator
+handles reset and ring addresses. Nothing from it is used in the project;
+the behaviour cited above is attributed to QEMU, where it was confirmed
+independently.
+
 ## Windows 9x reference material
 
 Section and file alignment of Realtek's own Windows 95, 98 and ME drivers,

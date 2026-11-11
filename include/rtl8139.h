@@ -15,8 +15,10 @@
 #define RTL_EOR UINT32_C(0x40000000)
 #define RTL_FS UINT32_C(0x20000000)
 #define RTL_LS UINT32_C(0x10000000)
-#define RTL_RX_ERROR UINT32_C(0x00100000)
+#define RTL_RX_ERROR UINT32_C(0x00100000)      /* summary: CRC, runt, long */
+#define RTL_RX_FIFO_ERROR UINT32_C(0x00400000) /* FIFO overflow, not in summary */
 #define RTL_TX_ERROR UINT32_C(0x00800000)
+#define RTL_TX_UNDERRUN UINT32_C(0x02000000)   /* FIFO underrun, not in summary */
 #define RTL_LENGTH_MASK UINT32_C(0x00001fff)
 
 enum rtl_register {
@@ -78,7 +80,9 @@ enum rtl_interrupt {
     RTL_INT_LINK_CHANGE = 0x0020,
     RTL_INT_RX_FIFO = 0x0040,
     RTL_INT_SYSTEM_ERROR = 0x8000,
-    RTL_INT_ALL = 0xe1ff /* every C+ ISR source (datasheet 6.7) */
+    /* Every C+ ISR source (datasheet 6.7) plus bit 10: documented as
+     * reserved, but silicon is reported to raise it. */
+    RTL_INT_ALL = 0xe5ff
 };
 
 struct rtl_descriptor {
@@ -173,8 +177,9 @@ struct rtl_device {
 typedef void (*rtl_receive_fn)(void *, const uint8_t *, unsigned);
 
 int rtl_valid_mac(const uint8_t mac[6]);
-/* Before rtl_init only: verifies the C+ engine, reloads the EEPROM (which
- * resets every register) and returns the factory station address. */
+/* Before rtl_init only: verifies the C+ engine, resets it (stopping any DMA
+ * left running by firmware or a previous OS), reloads the EEPROM and
+ * returns the factory station address. */
 enum rtl_result rtl_identify(const struct rtl_bus *, uint8_t mac[6]);
 /* Reports the PHY link from MSR; *mbps is 0 without link, else 10 or 100. */
 enum rtl_result rtl_link(struct rtl_device *, unsigned *mbps);
@@ -192,7 +197,8 @@ enum rtl_result rtl_set_filter(struct rtl_device *, uint32_t,
 enum rtl_result rtl_send(struct rtl_device *, const uint8_t *, unsigned);
 unsigned rtl_reap_tx(struct rtl_device *);
 unsigned rtl_poll_rx(struct rtl_device *, unsigned, rtl_receive_fn, void *);
-/* Bounded (about 1 ms) busy wait; the counters reset only with the chip. */
+/* Bounded (about 10 ms) busy wait. Whether a chip reset clears the counters
+ * is not documented, so callers should work with differences. */
 enum rtl_result rtl_dump_tally(struct rtl_device *, struct rtl_tally *);
 
 #endif
