@@ -3,9 +3,15 @@
  * Boot code for the driver floppy, placed after the FAT12 BPB (offset 0x3e)
  * and covering the rest of sector 0. The image has no 0x55AA signature, so
  * BIOSes that check it skip the floppy. A BIOS that runs it anyway gets this
- * code, which starts the first hard disk as if the floppy were absent. If
- * that disk cannot be read or has no boot signature, it asks for the floppy
- * to be removed and reboots on a key press.
+ * code, which carries on as if the floppy were absent:
+ * - A BIOS that follows the BIOS Boot Specification (most from 1996 on)
+ *   boots the next device in its own boot order after INT 18h, so a CD-ROM
+ *   set to boot before the hard disk is not passed over. Such a BIOS
+ *   answers Plug and Play BIOS function 60h (BBS: get version), reached
+ *   through the $PnP header in segment F000.
+ * - Any other BIOS boots the floppy or the first hard disk, so the code
+ *   starts that disk itself. If it cannot be read or has no boot signature,
+ *   it asks for the floppy to be removed and reboots on a key press.
  */
     .code16
     .text
@@ -25,6 +31,49 @@ start:
     rep movsw
     ljmp $0, $(COPY + relocated - start)
 relocated:
+    /* The $PnP header: on a 16-byte boundary in F000, its bytes (length at
+       +5) summing to 0 */
+    mov $0xf000, %ax
+    mov %ax, %es
+    xor %di, %di
+scan:
+    cmpw $0x5024, %es:(%di)  /* "$P" */
+    jne next
+    cmpw $0x506e, %es:2(%di) /* "nP" */
+    jne next
+    xor %ax, %ax
+    mov %es:5(%di), %cl
+    xor %ch, %ch
+    jcxz next
+    mov %di, %bx
+sum:
+    add %es:(%bx), %al
+    inc %bx
+    loop sum
+    test %al, %al
+    jz pnp
+next:
+    add $16, %di
+    jnz scan
+    jmp chain
+pnp:
+    /* Function 60h (Function, far *Version, BiosSelector) through the
+       real-mode entry point: arguments pushed right to left, removed by the
+       caller, AX = 0 when the BIOS follows the BBS */
+    sub $2, %sp              /* the version */
+    mov %sp, %bx
+    pushw %es:0x1b(%di)      /* real-mode data segment */
+    push %ss
+    push %bx
+    pushw $0x60
+    lcall *%es:0x0d(%di)     /* real-mode entry: offset, then segment */
+    add $10, %sp
+    test %ax, %ax
+    jnz chain
+    int $0x18                /* the next device in the BIOS's boot order */
+chain:
+    xor %ax, %ax             /* ES pointed at F000 for the scan */
+    mov %ax, %es
     mov $3, %bp
 read:
     mov $0x0201, %ax     /* read one sector */

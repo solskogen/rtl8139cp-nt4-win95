@@ -65,7 +65,7 @@ make help       # all targets
 |------|---------|
 | `src/core/`, `include/` | OS-independent C+ hardware core: reset, identification, descriptor rings, filters, VLAN, media, counters |
 | `src/ndis/miniport.c` | NDIS 3 miniport, shared by NT 4.0 and Windows 95 |
-| `src/boot/floppy.S` | Boot sector for the floppy: starts the hard disk, or asks you to remove the disk |
+| `src/boot/floppy.S` | Boot sector for the floppy: hands the BIOS its next boot device, or starts the hard disk, or asks you to remove the disk |
 | `compat/` | Minimal NDIS 3 declarations, `NDIS.SYS` import list, port I/O |
 | `packaging/` | NT 4.0 and Windows 95 installers |
 | `tests/` | Host tests, QEMU tests, binary and package checks |

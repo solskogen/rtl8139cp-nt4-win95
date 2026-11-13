@@ -149,7 +149,7 @@ help:
 	@echo '  package    check, then create dist/{nt4,win9x}/ and dist/SHA256SUMS'
 	@echo '  floppy     package, then create $(FLOPPY) (needs mtools)'
 	@echo '  test-floppy  floppy, then boot it in QEMU to verify it is not'
-	@echo '             bootable (needs qemu-system-i386)'
+	@echo '             bootable (needs qemu-system-i386 and xorriso)'
 	@echo '  clean      remove build outputs and generated packages'
 	@echo '  help       show this text'
 	@echo

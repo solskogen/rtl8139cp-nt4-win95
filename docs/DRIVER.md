@@ -21,10 +21,15 @@ ME as the Have Disk path. Installer and driver files have 8.3 names.
 The disk is deliberately not bootable. Its boot sector has no `0x55AA`
 signature, so a BIOS that checks it skips the floppy and boots the next
 device. A BIOS that runs the boot code anyway gets a small loader
-(`src/boot/floppy.S`) that starts the first hard disk as if the floppy were
-absent; if there is no bootable hard disk it asks for the floppy to be
-removed and restarts on a key press. `make test-floppy` checks all three
-cases in QEMU. Windows NT's FAT driver recognizes the volume by its jump
+(`src/boot/floppy.S`) that carries on as if the floppy were absent. A BIOS
+that follows the BIOS Boot Specification (most from 1996 on; the loader
+asks it through Plug and Play function 60h) is handed back the boot with
+INT 18h and boots the next device in its own order, so a CD-ROM set to boot
+before the hard disk, such as the Windows NT 4.0 CD, still boots with the
+floppy in the drive. With an older BIOS the loader starts the first hard
+disk itself; if there is no bootable hard disk it asks for the floppy to be
+removed and restarts on a key press. `make test-floppy` checks these cases
+in QEMU. Windows NT's FAT driver recognizes the volume by its jump
 instruction and BPB, not the signature; Windows 95 also reads it (driver
 installed from the floppy in the QEMU test).
 
